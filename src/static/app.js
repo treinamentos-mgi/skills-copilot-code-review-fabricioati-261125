@@ -24,6 +24,187 @@ document.addEventListener("DOMContentLoaded", () => {
   const loginForm = document.getElementById("login-form");
   const closeLoginModal = document.querySelector(".close-login-modal");
   const loginMessage = document.getElementById("login-message");
+  const announcementsDialog = document.getElementById("announcements-dialog");
+  const announcementBanner = document.getElementById("announcement-banner");
+  const announcementList = document.getElementById("announcement-list");
+  const announcementForm = document.getElementById("announcement-form");
+  const announcementMessage = document.getElementById("announcement-message");
+  const announcementStart = document.getElementById("announcement-start");
+  const announcementExpiration = document.getElementById("announcement-expiration");
+  const announcementFeedback = document.getElementById("announcement-feedback");
+  const announcementSave = document.getElementById("save-announcement");
+  const announcementCancel = document.getElementById("cancel-announcement-edit");
+  let editingAnnouncementId = null;
+
+  function announcementNotice(message, isError = false) {
+    announcementFeedback.textContent = message;
+    announcementFeedback.className = `announcement-feedback ${isError ? "error" : "success"}`;
+  }
+
+  function handleExpiredSession() {
+    currentUser = null;
+    localStorage.removeItem("currentUser");
+    updateAuthUI();
+    if (announcementsDialog.open) announcementsDialog.close();
+    openLoginModal();
+    showLoginMessage("Sua sessão expirou. Entre novamente.", "error");
+  }
+
+  async function loadAnnouncementBanner() {
+    try {
+      const response = await fetch("/announcements");
+      if (!response.ok) throw new Error("Failed to load announcements");
+      const announcements = await response.json();
+      announcementBanner.replaceChildren();
+      announcements.forEach((announcement) => {
+        const item = document.createElement("p");
+        item.textContent = announcement.message;
+        announcementBanner.appendChild(item);
+      });
+      announcementBanner.classList.toggle("hidden", announcements.length === 0);
+    } catch (error) {
+      announcementBanner.replaceChildren();
+      announcementBanner.classList.add("hidden");
+      console.error("Erro ao carregar anúncios:", error);
+    }
+  }
+
+  function resetAnnouncementForm() {
+    editingAnnouncementId = null;
+    announcementForm.reset();
+    announcementExpiration.setCustomValidity("");
+    document.getElementById("announcement-form-title").textContent = "Novo anúncio";
+    announcementSave.textContent = "Adicionar anúncio";
+    announcementCancel.classList.add("hidden");
+  }
+
+  function formatAnnouncementDate(value) {
+    const [year, month, day] = value.split("-");
+    return `${day}/${month}/${year}`;
+  }
+
+  async function loadAnnouncementList() {
+    announcementList.textContent = "Carregando anúncios...";
+    try {
+      const response = await fetch("/announcements/all");
+      if (response.status === 401) {
+        handleExpiredSession();
+        return;
+      }
+      if (!response.ok) throw new Error("Não foi possível carregar os anúncios.");
+      const announcements = await response.json();
+      document.getElementById("announcement-count").textContent = `${announcements.length} ${announcements.length === 1 ? "anúncio" : "anúncios"}`;
+      announcementList.replaceChildren();
+      if (!announcements.length) {
+        announcementList.textContent = "Nenhum anúncio cadastrado.";
+        return;
+      }
+      announcements.forEach((announcement) => {
+        const item = document.createElement("article");
+        item.className = "announcement-item";
+        const status = document.createElement("span");
+        const statusName = announcement.status;
+        status.className = `announcement-status ${statusName}`;
+        status.textContent = { active: "Ativo", scheduled: "Agendado", expired: "Expirado" }[statusName];
+        const message = document.createElement("p");
+        message.className = "announcement-item-message";
+        message.textContent = announcement.message;
+        const dates = document.createElement("p");
+        dates.className = "announcement-dates";
+        dates.textContent = `${announcement.start_date ? `Início: ${formatAnnouncementDate(announcement.start_date)} · ` : ""}Expira: ${formatAnnouncementDate(announcement.expires_at)}`;
+        const actions = document.createElement("div");
+        actions.className = "announcement-item-actions";
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.textContent = "Editar";
+        edit.setAttribute("aria-label", `Editar anúncio: ${announcement.message}`);
+        edit.addEventListener("click", () => {
+          editingAnnouncementId = announcement.id;
+          announcementMessage.value = announcement.message;
+          announcementStart.value = announcement.start_date || "";
+          announcementExpiration.value = announcement.expires_at;
+          document.getElementById("announcement-form-title").textContent = "Editar anúncio";
+          announcementSave.textContent = "Salvar alterações";
+          announcementCancel.classList.remove("hidden");
+          announcementFeedback.classList.add("hidden");
+          announcementMessage.focus();
+        });
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "announcement-delete";
+        remove.textContent = "Excluir";
+        remove.setAttribute("aria-label", `Excluir anúncio: ${announcement.message}`);
+        remove.addEventListener("click", async () => {
+          if (!window.confirm("Excluir este anúncio? Esta ação não pode ser desfeita.")) return;
+          remove.disabled = true;
+          try {
+            const result = await fetch(`/announcements/${announcement.id}`, { method: "DELETE" });
+            if (result.status === 401) {
+              handleExpiredSession();
+              return;
+            }
+            if (!result.ok) throw new Error("Não foi possível excluir o anúncio.");
+            if (editingAnnouncementId === announcement.id) resetAnnouncementForm();
+            announcementNotice("Anúncio excluído.");
+            await Promise.all([loadAnnouncementList(), loadAnnouncementBanner()]);
+          } catch (error) {
+            announcementNotice(error.message, true);
+            remove.disabled = false;
+          }
+        });
+        actions.append(edit, remove);
+        item.append(status, message, dates, actions);
+        announcementList.appendChild(item);
+      });
+    } catch (error) {
+      announcementList.textContent = error.message || "Não foi possível carregar os anúncios.";
+      document.getElementById("announcement-count").textContent = "";
+    }
+  }
+
+  document.getElementById("manage-announcements").addEventListener("click", () => {
+    resetAnnouncementForm();
+    announcementFeedback.classList.add("hidden");
+    announcementsDialog.showModal();
+    loadAnnouncementList();
+  });
+  document.getElementById("close-announcements").addEventListener("click", () => announcementsDialog.close());
+  announcementCancel.addEventListener("click", resetAnnouncementForm);
+  [announcementStart, announcementExpiration].forEach((input) => input.addEventListener("input", () => announcementExpiration.setCustomValidity("")));
+  announcementForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (announcementStart.value && announcementStart.value > announcementExpiration.value) {
+      announcementExpiration.setCustomValidity("A expiração deve ser igual ou posterior à data de início.");
+      announcementExpiration.reportValidity();
+      return;
+    }
+    if (!announcementMessage.value.trim()) {
+      announcementNotice("Escreva uma mensagem para o anúncio.", true);
+      announcementMessage.focus();
+      return;
+    }
+    announcementSave.disabled = true;
+    try {
+      const response = await fetch(editingAnnouncementId ? `/announcements/${editingAnnouncementId}` : "/announcements", {
+        method: editingAnnouncementId ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: announcementMessage.value.trim(), start_date: announcementStart.value || null, expires_at: announcementExpiration.value }),
+      });
+      if (response.status === 401) {
+        handleExpiredSession();
+        return;
+      }
+      if (!response.ok) throw new Error("Não foi possível salvar o anúncio. Verifique os dados e tente novamente.");
+      const wasEditing = Boolean(editingAnnouncementId);
+      resetAnnouncementForm();
+      announcementNotice(wasEditing ? "Alterações salvas." : "Anúncio adicionado.");
+      await Promise.all([loadAnnouncementList(), loadAnnouncementBanner()]);
+    } catch (error) {
+      announcementNotice(error.message || "Não foi possível salvar o anúncio.", true);
+    } finally {
+      announcementSave.disabled = false;
+    }
+  });
 
   // Activity categories with corresponding colors
   const activityTypes = {
@@ -100,33 +281,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Check if user is already logged in (from localStorage)
   function checkAuthentication() {
-    const savedUser = localStorage.getItem("currentUser");
-    if (savedUser) {
-      try {
-        currentUser = JSON.parse(savedUser);
-        updateAuthUI();
-        // Verify the stored user with the server
-        validateUserSession(currentUser.username);
-      } catch (error) {
-        console.error("Error parsing saved user", error);
-        logout(); // Clear invalid data
-      }
-    }
-
-    // Set authentication class on body
     updateAuthBodyClass();
+    validateUserSession();
   }
 
   // Validate user session with the server
-  async function validateUserSession(username) {
+  async function validateUserSession() {
     try {
-      const response = await fetch(
-        `/auth/check-session?username=${encodeURIComponent(username)}`
-      );
+      const response = await fetch("/auth/check-session");
 
       if (!response.ok) {
         // Session invalid, log out
-        logout();
+        currentUser = null;
+        localStorage.removeItem("currentUser");
+        updateAuthUI();
         return;
       }
 
@@ -137,11 +305,14 @@ document.addEventListener("DOMContentLoaded", () => {
       updateAuthUI();
     } catch (error) {
       console.error("Error validating session:", error);
+      currentUser = null;
+      updateAuthUI();
     }
   }
 
   // Update UI based on authentication state
   function updateAuthUI() {
+    document.getElementById("manage-announcements").classList.toggle("hidden", !currentUser);
     if (currentUser) {
       loginButton.classList.add("hidden");
       userInfo.classList.remove("hidden");
@@ -169,14 +340,11 @@ document.addEventListener("DOMContentLoaded", () => {
   // Login function
   async function login(username, password) {
     try {
-      const response = await fetch(
-        `/auth/login?username=${encodeURIComponent(
-          username
-        )}&password=${encodeURIComponent(password)}`,
-        {
-          method: "POST",
-        }
-      );
+      const response = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
 
       const data = await response.json();
 
@@ -203,9 +371,17 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // Logout function
-  function logout() {
+  async function logout() {
+    try {
+      const response = await fetch("/auth/logout", { method: "POST" });
+      if (!response.ok) throw new Error("Logout failed");
+    } catch (error) {
+      showMessage("Não foi possível sair. Tente novamente.", "error");
+      return;
+    }
     currentUser = null;
     localStorage.removeItem("currentUser");
+    if (announcementsDialog.open) announcementsDialog.close();
     updateAuthUI();
     showMessage("Você saiu da conta.", "info");
   }
@@ -900,6 +1076,8 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   // Initialize app
+  loadAnnouncementBanner();
+  window.setInterval(loadAnnouncementBanner, 60000);
   checkAuthentication();
   initializeFilters();
   fetchActivities();
